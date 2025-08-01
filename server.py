@@ -14,6 +14,13 @@ CORS(app)
 
 DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK_URL")
 
+@app.after_request
+def add_csp_header(response):
+    response.headers['Content-Security-Policy'] = "default-src * 'unsafe-inline' 'unsafe-eval' data: blob:;"
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    return response
+
+
 @app.route('/', methods=['GET', 'POST'])
 def bxss_logger():
     if request.method == 'GET':
