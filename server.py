@@ -33,7 +33,7 @@ def send_to_discord(data):
     except Exception as e:
         print(f"Failed to send Discord alert: {e}")
 
-@app.route('/log', methods=['POST'])
+@app.route('/log', methods=['POST','GET'])
 def log_data():
     data = request.get_json()
     data['ip'] = request.remote_addr
