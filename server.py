@@ -35,7 +35,7 @@ def send_to_discord(data):
 
 @app.route('/log', methods=['POST','GET'])
 def log_data():
-    data = request.get_json()
+    data = request.get_json(force=True, silent=True)#updated
     data['ip'] = request.remote_addr
     data['received_at'] = datetime.utcnow().isoformat()
 
