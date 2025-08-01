@@ -117,6 +117,9 @@ document.head.appendChild(s);
 
     return jsonify({"error": "Unknown type"}), 400
 
+# app run here
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+
+
